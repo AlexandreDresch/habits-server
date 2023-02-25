@@ -40,17 +40,17 @@ export async function serverRoutes(server: FastifyInstance) {
     const weekDay = parsedDate.get("day");
 
     const possibleHabits = await prisma.habit.findMany({
-        where: {
-            created_at: {
-                lte: date,
-            },
-            weekDays: {
-                some: {
-                    week_day: weekDay,
-                }
-            }
-        }
-    })
+      where: {
+        created_at: {
+          lte: date,
+        },
+        weekDays: {
+          some: {
+            week_day: weekDay,
+          },
+        },
+      },
+    });
 
     const day = await prisma.day.findUnique({
       where: {
@@ -58,16 +58,84 @@ export async function serverRoutes(server: FastifyInstance) {
       },
       include: {
         dayHabits: true,
-      }
-    })
+      },
+    });
 
-    const completedHabits = day?.dayHabits.map(dayHabit => {
-      return dayHabit.habit_id
-    })
+    const completedHabits = day?.dayHabits.map((dayHabit) => {
+      return dayHabit.habit_id;
+    });
 
     return {
-        possibleHabits,
-        completedHabits
+      possibleHabits,
+      completedHabits,
+    };
+  });
+
+  server.patch("/habits/:id/toggle", async (req, res) => {
+    const toggleHabitParams = z.object({
+      id: z.string().uuid(),
+    });
+
+    const { id } = toggleHabitParams.parse(req.params);
+
+    const today = dayjs().startOf("day").toDate();
+
+    let day = await prisma.day.findUnique({
+      where: {
+        date: today,
+      },
+    });
+
+    if (!day) {
+      day = await prisma.day.create({
+        data: {
+          date: today,
+        },
+      });
     }
+
+    const dayHabit = await prisma.dayHabit.findUnique({
+      where: {
+        day_id_habit_id: {
+          day_id: day.id,
+          habit_id: id,
+        },
+      },
+    });
+
+    if (dayHabit) {
+      await prisma.dayHabit.delete({
+        where: {
+          id: dayHabit.id,
+        },
+      });
+    } else {
+      await prisma.dayHabit.create({
+        data: {
+          day_id: day.id,
+          habit_id: id,
+        },
+      });
+    }
+  });
+
+  server.get("/summary", async (req, res) => {
+    const summary = await prisma.$queryRaw`
+      SELECT days.id, days.date, (
+        SELECT cast(count(*) as float) 
+        FROM day_habits 
+        WHERE day_habits.day_id = days.id
+      ) as completed, (
+        SELECT cast(count(*) as float) 
+        FROM habit_week_days
+        JOIN habits 
+        ON habits.id = habit_week_days.habit_id
+        WHERE habit_week_days.week_day = cast(strftime('%w', days.date/1000.0, 'unixepoch') as int)
+        AND habits.created_at <= days.date
+      ) as amount
+      FROM days
+    `;
+
+    return summary;
   });
 }
